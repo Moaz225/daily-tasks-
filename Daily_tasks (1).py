@@ -1,74 +1,53 @@
 import logging
 import asyncio
-import nest_asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes
-from apscheduler.schedulers.background import BackgroundScheduler
+import os
 from datetime import datetime
 from pytz import timezone
+from flask import Flask, request, redirect
 
-nest_asyncio.apply()
-TOKEN = "7587071583:AAFN8TC9Od89D_nhe7scVholgT9NUenJBnY"
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+
+# ----------------------------------------------------
+# 1. الإعدادات الأساسية
+# ----------------------------------------------------
+TOKEN = os.environ.get("TELEGRAM_TOKEN", "7587071583:AAFN8TC9Od89D_nhe7scVholgT9NUenJBnY")
 GROUP_CHAT_ID = -4960478787
+# هذا مفتاح سري لحماية روابطك. اختر أي نص عشوائي طويل
+SECRET_KEY = os.environ.get("SECRET_KEY", "YOUR_LONG_RANDOM_SECRET_KEY_HERE_12345")
+
 logging.basicConfig(level=logging.INFO)
 
-# تخزين البيانات الديناميكية للوحة الأزرار
+# ----------------------------------------------------
+# 2. إعداد تطبيق البوت وتطبيق الويب
+# ----------------------------------------------------
+app_flask = Flask(__name__)
+app_telegram = Application.builder().token(TOKEN).build()
+
+# ----------------------------------------------------
+# 3. بيانات البوت (المهام والمتغيرات) - لا تغيير هنا
+# ----------------------------------------------------
 current_keyboard = []
 current_message_id = None
 user_task_log = {}
 
 daily_tasks = {
-    0: [  # Понедельник
-        "Чистка кофемолки",
-        "Протереть верхние полки в баре",
-        "Протереть подоконники",
-        "Проверить чистоту в туалетах",
-        "Поливка цветов",
-        "Протереть перила"
-    ],
-    1: [  # Вторник
-        "Протереть стены в баре",
-        "Попросить мойщицу оттереть стыки",
-        "Помыть раковину",
-        "Проверить чистоту в туалетах"
-    ],
-    2: [  # Среда
-        "Протереть стойки самообслуживания",
-        "Протереть подоконники",
-        "Порядок на полках под баром",
-        "Проверить чистоту в туалетах"
-    ],
-    3: [  # Четверг
-        "Протереть плафоны на 1 и 2 этажах",
-        "Порядок на складе",
-        "Протереть книжный стеллаж",
-        "Протереть подоконники",
-        "Проверить чистоту в туалетах",
-        "Поливка цветов",
-        "Протереть перила"
-    ],
-    4: [  # Пятница
-        "Помыть барные холодильники",
-        "Протереть подоконники",
-        "Помыть обе витрины",
-        "Проверить чистоту в туалетах"
-    ],
-    5: [  # Суббота
-        "Помыть и прибрать зону выдачи на кухне",
-        "Протереть подоконники",
-        "Проверить чистоту в туалетах"
-    ],
-    6: [  # Воскресенье
-        "Протереть книжный стеллаж",
-        "Протереть подоконники",
-        "Проверить чистоту в туалетах",
-        "Проверить и пополнить все схранилища и антисептики",
-        "Поливка цветов",
-        "Протереть перила"
-    ]
+    0: ["Чистка кофемолки", "Протереть верхние полки в баре", "Протереть подоконники", "Проверить чистоту в туалетах", "Поливка цветов", "Протереть перила"],
+    1: ["Протереть стены в баре", "Попросить мойщицу оттереть стыки", "Помыть раковину", "Проверить чистоту в туалетах"],
+    2: ["Протереть стойки самообслуживания", "Протереть подоконники", "Порядок на полках под баром", "Проверить чистоту в туалетах"],
+    3: ["Протереть плафоны на 1 и 2 этажах", "Порядок на складе", "Протереть книжный стеллаж", "Протереть подоконники", "Проверить чистоту в туалетах", "Поливка цветов", "Протереть перила"],
+    4: ["Помыть барные холодильники", "Протереть подоконники", "Помыть обе витрины", "Проверить чистоту в туалетах"],
+    5: ["Помыть и прибрать зону выдачи на кухне", "Протереть подоконники", "Проверить чистоту в туалетах"],
+    6: ["Протереть книжный стеллаж", "Протереть подоконники", "Проверить чистоту в туалетах", "Проверить и пополнить все схранилища и антисептики", "Поливка цветов", "Протереть перила"]
 }
 
-async def send_daily_task(context: ContextTypes.DEFAULT_TYPE):
+# ----------------------------------------------------
+# 4. وظيفة إرسال المهام (تم تعديلها قليلاً)
+# ----------------------------------------------------
+async def send_daily_task(application: Application):
+    """
+    يرسل قائمة المهام. يتم استدعاؤه الآن بواسطة المنبه الخارجي.
+    """
     global current_keyboard, current_message_id, user_task_log
     time_now = datetime.now(timezone("Asia/Yekaterinburg"))
     day = time_now.weekday()
@@ -78,7 +57,7 @@ async def send_daily_task(context: ContextTypes.DEFAULT_TYPE):
     user_task_log.clear()
 
     if not tasks:
-        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text="📭 Сегодня заданий нет")
+        await application.bot.send_message(chat_id=GROUP_CHAT_ID, text="📭 Сегодня заданий нет")
         return
 
     day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
@@ -89,19 +68,25 @@ async def send_daily_task(context: ContextTypes.DEFAULT_TYPE):
         current_keyboard.append([InlineKeyboardButton(f"☑ {task}", callback_data=f"task_{i}")])
     current_keyboard.append([InlineKeyboardButton("✅ Я всё выполнил!", callback_data="all_done")])
 
-    sent_message = await context.bot.send_message(
-        chat_id=GROUP_CHAT_ID,
-        text=header,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(current_keyboard)
-    )
+    try:
+        sent_message = await application.bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text=header,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(current_keyboard)
+        )
+        current_message_id = sent_message.message_id
+    except Exception as e:
+        logging.error(f"Failed to send message: {e}")
 
-    current_message_id = sent_message.message_id
-
+# ----------------------------------------------------
+# 5. معالج الأزرار (لا تغيير هنا)
+# ----------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global current_keyboard, current_message_id
     query = update.callback_query
     await query.answer()
+    
     user_id = query.from_user.id
     user_name = query.from_user.first_name
     time_now = datetime.now(timezone("Asia/Yekaterinburg"))
@@ -118,44 +103,82 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("task_"):
-        index = int(data.split("_")[1])
-        if 0 <= index < len(tasks):
-            if index in user_task_log[user_id]:
-                await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"⚠️ {user_name}, вы уже отметили задачу: *{tasks[index]}*", parse_mode="Markdown")
-            else:
-                user_task_log[user_id].add(index)
-                await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"✅ {user_name} выполнил(а) задачу: *{tasks[index]}*", parse_mode="Markdown")
+        try:
+            index = int(data.split("_")[1])
+            if 0 <= index < len(tasks):
+                task_text = tasks[index]
+                if index in user_task_log[user_id]:
+                    await query.message.reply_text(f"⚠️ {user_name}, вы уже отметили задачу: *{task_text}*", parse_mode="Markdown")
+                else:
+                    user_task_log[user_id].add(index)
+                    await query.message.reply_text(f"✅ {user_name} выполнил(а) задачу: *{task_text}*", parse_mode="Markdown")
+                    
+                    # حذف الزر
+                    new_keyboard = [row for row in current_keyboard if not (len(row) == 1 and row[0].callback_data == data)]
+                    current_keyboard = new_keyboard
 
-                # 🧠 حذف الزر من اللوحة
-                new_keyboard = []
-                for row in current_keyboard:
-                    new_row = [btn for btn in row if btn.callback_data != data]
-                    if new_row:
-                        new_keyboard.append(new_row)
-                current_keyboard = new_keyboard
+                    await context.bot.edit_message_reply_markup(
+                        chat_id=GROUP_CHAT_ID,
+                        message_id=current_message_id,
+                        reply_markup=InlineKeyboardMarkup(current_keyboard)
+                    )
+        except Exception as e:
+            logging.error(f"Error processing button click: {e}")
 
-                # تحديث الرسالة بالأزرار الجديدة
-                await context.bot.edit_message_reply_markup(
-                    chat_id=GROUP_CHAT_ID,
-                    message_id=current_message_id,
-                    reply_markup=InlineKeyboardMarkup(current_keyboard)
-                )
+# ----------------------------------------------------
+# 6. مسارات (Routes) خادم الويب
+# ----------------------------------------------------
 
-async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CallbackQueryHandler(button_handler))
+@app_flask.route("/")
+def index():
+    # صفحة رئيسية بسيطة للتأكد أن الخادم يعمل
+    return "Bot is alive!"
 
-    class DummyContext:
-        bot = app.bot
+@app_flask.route(f"/webhook", methods=['POST'])
+def webhook_handler():
+    """هذا المسار يستقبل التحديثات من تيليجرام"""
+    async def process_update():
+        update = Update.de_json(request.get_json(force=True), app_telegram.bot)
+        await app_telegram.process_update(update)
+    
+    asyncio.run(process_update())
+    return 'ok', 200
 
-    await send_daily_task(DummyContext())
+@app_flask.route(f"/trigger_daily_task/{SECRET_KEY}", methods=['GET'])
+def trigger_task():
+    """
+    هذا هو المسار السري الذي سيزوره المنبه الخارجي.
+    """
+    async def run_task():
+        await send_daily_task(app_telegram)
+    
+    asyncio.run(run_task())
+    return "Daily task triggered", 200
 
-    scheduler = BackgroundScheduler(timezone="Asia/Yekaterinburg")
-    scheduler.add_job(lambda: asyncio.create_task(send_daily_task(DummyContext())), "cron", hour=13, minute=0)
-    scheduler.start()
+@app_flask.route(f"/set_webhook/{SECRET_KEY}", methods=['GET'])
+def set_webhook():
+    """
+    قم بزيارة هذا الرابط مرة واحدة فقط بعد النشر لربط البوت.
+    """
+    RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
+    if not RENDER_URL:
+        return "Error: RENDER_EXTERNAL_URL not set"
+        
+    webhook_url = f"{RENDER_URL}/webhook"
+    
+    async def run_set_webhook():
+        await app_telegram.bot.set_webhook(webhook_url)
+        return f"Webhook set successfully to {webhook_url}"
+    
+    return asyncio.run(run_set_webhook())
 
-    print("🤖 Бот запущен и работает...")
-    await app.run_polling()
-
+# ----------------------------------------------------
+# 7. نقطة البدء
+# ----------------------------------------------------
 if __name__ == "__main__":
-    asyncio.run(main())
+    # تسجيل معالج الأزرار
+    app_telegram.add_handler(CallbackQueryHandler(button_handler))
+    
+    # لا تقم بتشغيل app_flask.run() هنا
+    # Render سيستخدم gunicorn لتشغيله
+    pass
